@@ -184,19 +184,35 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Если user_ids не указаны, отправлять не будем
-	if len(msg.UserIDs) == 0 {
-		http.Error(w, "No user_ids provided", http.StatusBadRequest)
-		return
-	}
-
-	// Отправляем сообщение указанным пользователям
 	clientsMutex.Lock()
 	defer clientsMutex.Unlock()
 
-	for _, id := range msg.UserIDs {
+	// Если user_ids не пустой, отправляем только этим пользователям
+	if len(msg.UserIDs) > 0 {
+		sendToUsers(msg.UserIDs, msg)
+	} else if msg.Room != "" {
+		// Если user_ids пустой, но указана комната, отправляем всем из комнаты
+		usersInRoom, exists := rooms[msg.Room]
+		if !exists {
+			http.Error(w, "Room not found", http.StatusNotFound)
+			return
+		}
+		sendToUsers(usersInRoom, msg)
+	} else {
+		// Если и user_ids, и room пустые — ошибка
+		http.Error(w, "No recipients specified", http.StatusBadRequest)
+		return
+	}
+
+	// Ответ на POST запрос
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Message sent")
+}
+
+// Вспомогательная функция для отправки сообщения списку пользователей
+func sendToUsers(userIDs []string, msg Message) {
+	for _, id := range userIDs {
 		if client, ok := clients[id]; ok {
-			// Отправляем сообщение
 			messageJSON, err := json.Marshal(msg)
 			if err != nil {
 				log.Printf("Error marshalling message: %v", err)
@@ -210,10 +226,6 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Client %s not connected", id)
 		}
 	}
-
-	// Ответ на POST запрос
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Message sent to %d clients", len(msg.UserIDs))
 }
 
 func main() {

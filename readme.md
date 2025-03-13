@@ -14,6 +14,20 @@ WebSocket server for project "Proctoring.kz"
 ### Connected URL
 - ws://127.0.0.1:8080/ws?user_id=1
 
+### Connected URL To room
+- ws://127.0.0.1:8080/ws?user_id=1&room_id=1
+
+### SendMessage via WebSocket body
+```
+{
+  "type": "message",
+  "message": "hello world",
+  "room": "1",
+  "user_ids": ["2"]
+}
+```
+
+
 ### SendMessage for POST Request
 - curl --location 'http://127.0.0.1:8080/send' \
   --header 'Content-Type: application/json' \
@@ -23,3 +37,4 @@ WebSocket server for project "Proctoring.kz"
   "body": "Hello world big text",
   "user_ids": ["1", "2", "3", "4"]
   }' 
+
