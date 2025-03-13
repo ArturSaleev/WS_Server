@@ -1,0 +1,154 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/gorilla/websocket"
+	"log"
+	"net/http"
+	"sync"
+)
+
+// Структура сообщения
+type Message struct {
+	Type    string   `json:"type"`
+	Message string   `json:"message"`
+	Body    string   `json:"body"`
+	UserIDs []string `json:"user_ids"` // Список ID пользователей, которым нужно отправить сообщение
+}
+
+// Структура для хранения WebSocket соединений с привязкой к пользователям
+type Client struct {
+	conn *websocket.Conn
+	id   string
+}
+
+var (
+	clients      = make(map[string]*Client) // Хранение пользователей по ID
+	clientsMutex sync.Mutex                 // Мьютекс для синхронизации доступа к клиентам
+	upgrader     = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+)
+
+// Обработка сообщений от клиента через WebSocket
+func handleMessages(conn *websocket.Conn, userID string) {
+	defer conn.Close()
+
+	for {
+		// Чтение сообщения от клиента
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("Error reading message: %v", err)
+			clientsMutex.Lock()
+			delete(clients, userID)
+			clientsMutex.Unlock()
+			break
+		}
+
+		// Парсинг JSON сообщения
+		var msgObj Message
+		if err := json.Unmarshal(msg, &msgObj); err != nil {
+			log.Printf("Error unmarshalling message: %v", err)
+			continue
+		}
+
+		// Выводим сообщение в консоль
+		fmt.Printf("Received message: Type=%s, Message=%s, Body=%s\n", msgObj.Type, msgObj.Message, msgObj.Body)
+
+		// Пересылаем сообщение всем указанным пользователям
+		clientsMutex.Lock()
+		for _, id := range msgObj.UserIDs {
+			if client, ok := clients[id]; ok {
+				err := client.conn.WriteMessage(websocket.TextMessage, msg)
+				if err != nil {
+					log.Printf("Error sending message to client %s: %v", id, err)
+				}
+			}
+		}
+		clientsMutex.Unlock()
+	}
+}
+
+// Обработчик WebSocket-соединений
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Преобразование HTTP-соединения в WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Error upgrading connection: %v", err)
+		return
+	}
+
+	// Получаем user_id из запроса
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		log.Println("User ID is required")
+		conn.Close()
+		return
+	}
+
+	// Добавляем клиента
+	clientsMutex.Lock()
+	clients[userID] = &Client{conn: conn, id: userID}
+	clientsMutex.Unlock()
+
+	log.Printf("User %s connected", userID)
+
+	// Обрабатываем сообщения от клиента
+	handleMessages(conn, userID)
+}
+
+// Обработчик POST запросов для отправки сообщений
+func sendMessage(w http.ResponseWriter, r *http.Request) {
+	// Чтение и парсинг POST запроса
+	var msg Message
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&msg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Если user_ids не указаны, отправлять не будем
+	if len(msg.UserIDs) == 0 {
+		http.Error(w, "No user_ids provided", http.StatusBadRequest)
+		return
+	}
+
+	// Отправляем сообщение указанным пользователям
+	clientsMutex.Lock()
+	defer clientsMutex.Unlock()
+
+	for _, id := range msg.UserIDs {
+		if client, ok := clients[id]; ok {
+			// Отправляем сообщение
+			messageJSON, err := json.Marshal(msg)
+			if err != nil {
+				log.Printf("Error marshalling message: %v", err)
+				continue
+			}
+			err = client.conn.WriteMessage(websocket.TextMessage, messageJSON)
+			if err != nil {
+				log.Printf("Error sending message to client %s: %v", id, err)
+			}
+		} else {
+			log.Printf("Client %s not connected", id)
+		}
+	}
+
+	// Ответ на POST запрос
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Message sent to %d clients", len(msg.UserIDs))
+}
+
+func main() {
+	// Обработчики
+	http.HandleFunc("/ws", handleWebSocket) // WebSocket соединения
+	http.HandleFunc("/send", sendMessage)   // POST запрос для отправки сообщений
+
+	// Запуск сервера
+	port := "8080"
+	log.Printf("Starting server on :%s", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
+}

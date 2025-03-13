@@ -1,0 +1,6 @@
+{
+  "server_mode": "http",
+  "cert_file_path": "/path/to/cert.pem",
+  "key_file_path": "/path/to/key.pem",
+  "port": "8080"
+}
